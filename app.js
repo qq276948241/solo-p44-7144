@@ -7,6 +7,7 @@ require('./config/database');
 const { router: memberRoutes } = require('./routes/members');
 const petRoutes = require('./routes/pets');
 const appointmentRoutes = require('./routes/appointments');
+const { router: borrowingRoutes } = require('./routes/borrowings');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,12 +44,26 @@ app.get('/', (req, res) => {
         'POST /api/appointments': '创建预约（需登录）',
         'PUT /api/appointments/:id/confirm': '确认完成服务（需登录，累计消费升级）',
         'PUT /api/appointments/:id/cancel': '取消预约（需登录）'
+      },
+      '借用管理模块': {
+        'GET /api/borrowings/items': '获取可借物品列表',
+        'GET /api/borrowings/items/:id': '获取物品详情',
+        'GET /api/borrowings': '获取我的借用记录（需登录）',
+        'GET /api/borrowings/overdue': '获取全部逾期未还记录，按逾期天数倒序（需登录）',
+        'GET /api/borrowings/:id': '获取借用详情（需登录）',
+        'POST /api/borrowings': '申请借用（需登录，扣库存+自动算预计归还日）',
+        'PUT /api/borrowings/:id/return': '归还物品（需登录，加回库存+记录实际归还日）'
       }
     },
     '会员等级规则': {
       '普通会员': '默认等级',
       '银卡会员': '累计消费满 500 元自动升级',
       '金卡会员': '累计消费满 2000 元自动升级，全场 8 折'
+    },
+    '借用逾期规则': {
+      '宽限期': '预计归还日期后 3 天内不算逾期',
+      '逾期判定': '超过预计归还日期 3 天以上自动标记为「逾期」',
+      '逾期列表': '按逾期天数从大到小倒序排列'
     }
   });
 });
@@ -56,6 +71,7 @@ app.get('/', (req, res) => {
 app.use('/api/members', memberRoutes);
 app.use('/api/pets', petRoutes);
 app.use('/api/appointments', appointmentRoutes);
+app.use('/api/borrowings', borrowingRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

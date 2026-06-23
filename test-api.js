@@ -1,8 +1,36 @@
 require('dotenv').config();
 const http = require('http');
+const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
 const { spawn } = require('child_process');
 
 const BASE_URL = 'http://localhost:3000';
+
+function dateOffsetStr(days) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function injectOverdueTestData(memberId, itemIdA, itemIdB, itemIdC) {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(path.join(__dirname, process.env.DB_PATH || './data/petshop.db'));
+    const stmt = db.prepare(`
+      INSERT INTO borrowings
+      (member_id, item_id, quantity, borrow_date, expected_return_date, status, overdue_days, notes)
+      VALUES (?, ?, 1, ?, ?, '借用中', 0, ?)
+    `);
+    let pending = 3;
+    const done = () => { if (--pending === 0) { db.close(); resolve(); } };
+    stmt.run(memberId, itemIdA, dateOffsetStr(-20), dateOffsetStr(-13), '逾期10天记录（超期3天宽限期后算10天）', done);
+    stmt.run(memberId, itemIdB, dateOffsetStr(-15), dateOffsetStr(-8), '逾期5天记录', done);
+    stmt.run(memberId, itemIdC, dateOffsetStr(-2), dateOffsetStr(0), '今天到期，未逾期', done);
+    stmt.finalize((err) => { if (err) reject(err); });
+  });
+}
 
 function request(method, path, body = null, token = null) {
   return new Promise((resolve, reject) => {
@@ -266,6 +294,72 @@ async function runTests() {
     } else {
       console.log('  ⚠️ 今日无可预约时段，跳过预约测试');
     }
+
+    console.log('\n📝 14. 测试 - 获取可借物品列表');
+    res = await request('GET', '/api/borrowings/items');
+    console.log('  状态码:', res.status);
+    console.log('  物品总数:', res.body.data.length);
+    res.body.data.forEach(i => {
+      console.log(`    - ${i.name} [${i.category}] ¥${i.deposit}押金 可借${i.available_quantity}/${i.total_quantity} 最长${i.max_borrow_days}天`);
+    });
+    const itemList = res.body.data;
+
+    console.log('\n📝 15. 测试 - 申请借用物品');
+    const borrowBody = {
+      item_id: itemList[0].id,
+      quantity: 1,
+      notes: '国庆出行用'
+    };
+    res = await request('POST', '/api/borrowings', borrowBody, token);
+    console.log('  状态码:', res.status);
+    console.log('  返回消息:', res.body.message);
+    console.log('  借用物品:', res.body.data.item_name);
+    console.log('  借用日期:', res.body.data.borrow_date);
+    console.log('  预计归还:', res.body.data.expected_return_date);
+    console.log('  当前状态:', res.body.data.status);
+    console.log('  是否逾期:', res.body.data.is_overdue, '(刚借，应该是 false)');
+    const borrowId = res.body.data.id;
+
+    console.log('\n📝 16. 测试 - 空逾期列表（刚借无逾期）');
+    res = await request('GET', '/api/borrowings/overdue', null, token);
+    console.log('  状态码:', res.status);
+    console.log('  逾期总数:', res.body.data.total, '(应为 0)');
+
+    console.log('\n📝 17. 测试 - 注入历史借用数据验证逾期检测与倒序');
+    await injectOverdueTestData(memberId, itemList[1].id, itemList[2].id, itemList[3].id);
+    console.log('  已插入 3 条历史记录: 逾期10天 / 逾期5天 / 今天到期');
+    res = await request('GET', '/api/borrowings/overdue', null, token);
+    console.log('  状态码:', res.status);
+    console.log('  逾期总数:', res.body.data.total, '(应为 2)');
+    console.log('  宽限期配置:', res.body.data.grace_days, '天');
+    console.log('  逾期列表顺序（按逾期天数倒序）:');
+    res.body.data.records.forEach((r, idx) => {
+      console.log(`    ${idx + 1}. [逾期${r.overdue_days}天] ${r.item_name} - 预计归还 ${r.expected_return_date}`);
+    });
+    const sortedCorrect = res.body.data.records.length >= 2
+      && res.body.data.records[0].overdue_days >= res.body.data.records[1].overdue_days;
+    console.log('  倒序排列正确:', sortedCorrect ? '✅ 是' : '❌ 否');
+
+    console.log('\n📝 18. 测试 - 归还物品');
+    res = await request('PUT', `/api/borrowings/${borrowId}/return`, null, token);
+    console.log('  状态码:', res.status);
+    console.log('  返回消息:', res.body.message);
+    console.log('  状态:', res.body.data.status);
+    console.log('  实际归还日期:', res.body.data.actual_return_date);
+
+    console.log('\n📝 19. 测试 - 归还后库存数量回增');
+    res = await request('GET', `/api/borrowings/items/${itemList[0].id}`);
+    console.log('  状态码:', res.status);
+    console.log(`  ${res.body.data.name}: 可借 ${res.body.data.available_quantity}/${res.body.data.total_quantity}`);
+
+    console.log('\n📝 20. 测试 - 获取我的借用记录');
+    res = await request('GET', '/api/borrowings', null, token);
+    console.log('  状态码:', res.status);
+    console.log('  借用记录总数:', res.body.data.length);
+    res.body.data.slice(0, 5).forEach(b => {
+      const flag = b.is_overdue ? `⚠️ 逾期${b.overdue_days}天` : b.status;
+      console.log(`    [${flag}] ${b.item_name} - 借 ${b.borrow_date} / 应还 ${b.expected_return_date}`);
+    });
 
     console.log('\n' + '='.repeat(60));
     console.log('\n✅ 所有测试通过！服务运行正常。');

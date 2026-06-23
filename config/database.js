@@ -88,6 +88,48 @@ db.serialize(() => {
   insertServices.run('寄养', '按天收费，提供舒适环境和定时喂养', 80, 1440, 10);
   insertServices.run('体检', '常规健康检查，包含体温、心率、基础血检', 200, 60, 2);
 
+  db.run(`CREATE TABLE IF NOT EXISTS items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    category TEXT,
+    total_quantity INTEGER NOT NULL DEFAULT 1,
+    available_quantity INTEGER NOT NULL DEFAULT 1,
+    deposit REAL DEFAULT 0,
+    max_borrow_days INTEGER NOT NULL DEFAULT 7,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+
+  db.run(`CREATE TABLE IF NOT EXISTS borrowings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    member_id INTEGER NOT NULL,
+    item_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1,
+    borrow_date DATE NOT NULL,
+    expected_return_date DATE NOT NULL,
+    actual_return_date DATE,
+    status TEXT DEFAULT '借用中' NOT NULL,
+    overdue_days INTEGER DEFAULT 0 NOT NULL,
+    notes TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (member_id) REFERENCES members(id),
+    FOREIGN KEY (item_id) REFERENCES items(id)
+  )`);
+
+  db.run(`CREATE INDEX IF NOT EXISTS idx_borrowings_status ON borrowings(status)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_borrowings_member ON borrowings(member_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_borrowings_expected ON borrowings(expected_return_date)`);
+
+  const insertItems = db.prepare(`
+    INSERT OR IGNORE INTO items (name, description, category, total_quantity, available_quantity, deposit, max_borrow_days)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  insertItems.run('宠物航空箱（大号）', '适合20kg以内犬猫外出托运', '出行用品', 5, 5, 200, 7);
+  insertItems.run('宠物航空箱（小号）', '适合5kg以内猫咪小型犬', '出行用品', 8, 8, 100, 7);
+  insertItems.run('宠物推车', '外出遛弯轻便推车，承重30kg', '出行用品', 3, 3, 300, 5);
+  insertItems.run('电推剪（专业款）', '宠物美容剃毛专用', '美容工具', 4, 4, 150, 3);
+  insertItems.run('猫包', '透气外出便携猫包', '出行用品', 10, 10, 50, 7);
+
   console.log('数据库表结构初始化完成');
 });
 
