@@ -32,6 +32,21 @@ function injectOverdueTestData(memberId, itemIdA, itemIdB, itemIdC) {
   });
 }
 
+function setBorrowingStatus(borrowingId, status, overdueDays = 0) {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(path.join(__dirname, process.env.DB_PATH || './data/petshop.db'));
+    db.run(
+      `UPDATE borrowings SET status = ?, overdue_days = ? WHERE id = ?`,
+      [status, overdueDays, borrowingId],
+      (err) => {
+        db.close();
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+}
+
 function request(method, path, body = null, token = null) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, BASE_URL);
@@ -351,6 +366,33 @@ async function runTests() {
     res = await request('GET', `/api/borrowings/items/${itemList[0].id}`);
     console.log('  状态码:', res.status);
     console.log(`  ${res.body.data.name}: 可借 ${res.body.data.available_quantity}/${res.body.data.total_quantity}`);
+
+    console.log('\n📝 19.5. 测试 - 逾期状态的借用记录能正常归还');
+    const overdueBody = {
+      item_id: itemList[1].id,
+      quantity: 1,
+      borrow_days: 3,
+      notes: '测试逾期归还'
+    };
+    res = await request('POST', '/api/borrowings', overdueBody, token);
+    const overdueBorrowId = res.body.data.id;
+    console.log('  新建借用记录 ID:', overdueBorrowId, '初始状态:', res.body.data.status);
+    await setBorrowingStatus(overdueBorrowId, '逾期', 8);
+    console.log('  手动标记为「逾期」状态，逾期 8 天');
+    const db = new sqlite3.Database(path.join(__dirname, process.env.DB_PATH || './data/petshop.db'));
+    await new Promise(resolve => {
+      db.run(`UPDATE borrowings SET expected_return_date = ? WHERE id = ?`,
+        [dateOffsetStr(-11), overdueBorrowId], (err) => { resolve(); });
+    });
+    db.close();
+    console.log('  同时把预计归还日期改为 11 天前，确保 refreshOverdue 不会把它刷回去');
+    res = await request('GET', `/api/borrowings/${overdueBorrowId}`, null, token);
+    console.log('  查询确认状态:', res.body.data.status, 'overdue_days:', res.body.data.overdue_days);
+    res = await request('PUT', `/api/borrowings/${overdueBorrowId}/return`, null, token);
+    console.log('  调用归还接口 - 状态码:', res.status, '消息:', res.body.message);
+    console.log('  归还后状态:', res.body.data.status, '实际归还日期:', res.body.data.actual_return_date);
+    const overdueReturnOk = res.status === 200 && res.body.data.status === '已归还';
+    console.log('  逾期归还成功:', overdueReturnOk ? '✅ 是' : '❌ 否');
 
     console.log('\n📝 20. 测试 - 获取我的借用记录');
     res = await request('GET', '/api/borrowings', null, token);

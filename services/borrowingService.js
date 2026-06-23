@@ -104,6 +104,9 @@ async function findBorrowing(borrowingId, memberId) {
 function validateReturnStatus(borrowing) {
   if (!borrowing) return { valid: false, code: 404, message: '借用记录不存在' };
   if (borrowing.status === '已归还') return { valid: false, code: 400, message: '该借用已归还，请勿重复操作' };
+  if (borrowing.status !== '借用中' && borrowing.status !== '逾期') {
+    return { valid: false, code: 400, message: `当前状态「${borrowing.status}」不允许归还` };
+  }
   return { valid: true };
 }
 
